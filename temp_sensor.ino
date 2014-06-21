@@ -1,15 +1,16 @@
 #include <LiquidCrystal.h>
 #include <OneWire.h>
 
+#define AUTOSCAN
 #define INTERVAL 10000UL
 #define MAX_SENSORS 3
 
 struct sensor_data {
   byte addr[8];
+  byte firstData;
   float cur;
   float high;
   float low;
-  byte firstData;
 };
 
 const int sensorPin = A0;    // select the input pin for the potentiometer
@@ -18,45 +19,40 @@ const int displLedPin = 10;
 LiquidCrystal lcd(8, 13, 9, 4, 5, 6, 7);
 OneWire ds(2);
 
-int firstScan = 1;
 int numSensors = 0;
 int selSensor = 0;
 int scanSensor = 0;
 unsigned long previousMillis = 0;
 
-struct sensor_data sensor[MAX_SENSORS];
+#ifdef AUTOSCAN
+static struct sensor_data sensor[MAX_SENSORS];
+#else
+static struct sensor_data sensor[] =
+{
+  {{ 0x28, 0x21, 0x5C, 0xDA, 0x05, 0x00, 0x00, 0x04 }, 1, .0, .0, .0 }
+};
+#endif
 
 
-static void displayOff(void)
+static void display_off(void)
 {
   digitalWrite(displLedPin, LOW);
 }
 
-static void displayOn(void)
+static void display_on(void)
 {
   digitalWrite(displLedPin, HIGH);
 }
 
-static void displaySetup(void)
+static void display_setup(void)
 {
   pinMode(displLedPin, OUTPUT);
-  displayOn();
+  display_on();
+  lcd.clear();
+  lcd.begin(16, 2);
 }
 
-static void search_sensors(void)
-{
-  numSensors = 0;
-  while (numSensors < MAX_SENSORS) {
-    if (ds.search(sensor[numSensors].addr)) {
-      sensor[numSensors].firstData = 1;
-      numSensors++;
-    } else {
-      break;
-    }
-  }
-}
-
-static void updateDisplay(int sensor_id)
+static void display_update(int sensor_id)
 {
   struct sensor_data *pS = &sensor[sensor_id];
 
@@ -76,24 +72,46 @@ static void updateDisplay(int sensor_id)
   lcd.print("C");
 }
 
+static void sensor_setup(void)
+{
+#ifdef AUTOSCAN
+  struct sensor_data *pS;
+
+  numSensors = 0;
+  while (numSensors < MAX_SENSORS) {
+    int found;
+    pS = &sensor[numSensors];
+    found = ds.search(pS->addr);
+    if (found) {
+      byte id = pS->addr[0];
+      // only temp sensors
+      if (id != 0x10 && id != 0x28 && id != 0x22)
+        continue;
+
+      pS->firstData = 1;
+      numSensors++;
+    } else {
+      break;
+    }
+  }
+#else
+  numSensors = sizeof(sensor) / sizeof(sensor[0]);
+#endif
+}
+
+
 void setup()
 {
-  firstScan = 1;
-
-  displaySetup();
+  display_setup();
+  sensor_setup();
   Serial.begin(9600);
-  lcd.clear();
-  lcd.begin(16, 2);
   previousMillis = millis();
-
-  search_sensors();
 }
 
 void loop()
 {
   byte i;
   byte present = 0;
-  byte type_s;
   byte data[12];
   float celsius, fahrenheit;
   int buttonVal;
@@ -102,15 +120,15 @@ void loop()
   buttonVal = analogRead(sensorPin);
   if (buttonVal < 850) {
     previousMillis = millis();
-    displayOn();
-    selSensor = (selSensor + 1) % MAX_SENSORS;
+    display_on();
+    selSensor = (selSensor + 1) % numSensors;
   }
   if (millis() - previousMillis > INTERVAL) {
     previousMillis = millis();
-    displayOff();
+    display_off();
   }
 
-  updateDisplay(selSensor);
+  display_update(selSensor);
 
   if (!numSensors)
     return;
@@ -130,24 +148,6 @@ void loop()
   Serial.println();
  
   // the first ROM byte indicates which chip
-  switch (pS->addr[0]) {
-    case 0x10:
-      Serial.println("  Chip = DS18S20");  // or old DS1820
-      type_s = 1;
-      break;
-    case 0x28:
-      Serial.println("  Chip = DS18B20");
-      type_s = 0;
-      break;
-    case 0x22:
-      Serial.println("  Chip = DS1822");
-      type_s = 0;
-      break;
-    default:
-      Serial.println("Device is not a DS18x20 family device.");
-      return;
-  } 
-
   ds.reset();
   ds.select(pS->addr);
   ds.write(0x44, 1);        // start conversion, with parasite power on at the end
@@ -176,7 +176,7 @@ void loop()
   // be stored to an "int16_t" type, which is always 16 bits
   // even when compiled on a 32 bit processor.
   int16_t raw = (data[1] << 8) | data[0];
-  if (type_s) {
+  if (pS->addr[0] == 0x10) {
     raw = raw << 3; // 9 bit resolution default
     if (data[7] == 0x10) {
       // "count remain" gives full 12 bit resolution
@@ -212,7 +212,5 @@ void loop()
   pS->cur = celsius;
 
   scanSensor++;
-
-  firstScan = 0;
 }
 
