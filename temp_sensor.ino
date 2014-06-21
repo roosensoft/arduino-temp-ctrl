@@ -2,14 +2,29 @@
 #include <OneWire.h>
 
 #define INTERVAL 10000UL
+#define MAX_SENSORS 3
+
+struct sensor_data {
+  byte addr[8];
+  float cur;
+  float high;
+  float low;
+  byte firstData;
+};
+
+const int sensorPin = A0;    // select the input pin for the potentiometer
+const int displLedPin = 10;
 
 LiquidCrystal lcd(8, 13, 9, 4, 5, 6, 7);
 OneWire ds(2);
-float high, low;
-int firstMeasure;
-const int displLedPin = 10;
-const int sensorPin = A0;    // select the input pin for the potentiometer
+
+int firstScan = 1;
+int numSensors = 0;
+int selSensor = 0;
+int scanSensor = 0;
 unsigned long previousMillis = 0;
+
+struct sensor_data sensor[MAX_SENSORS];
 
 
 static void displayOff(void)
@@ -25,51 +40,97 @@ static void displayOn(void)
 static void displaySetup(void)
 {
   pinMode(displLedPin, OUTPUT);
-  displayOn();  
+  displayOn();
+}
+
+static void search_sensors(void)
+{
+  numSensors = 0;
+  while (numSensors < MAX_SENSORS) {
+    if (ds.search(sensor[numSensors].addr)) {
+      sensor[numSensors].firstData = 1;
+      numSensors++;
+    } else {
+      break;
+    }
+  }
+}
+
+static void updateDisplay(int sensor_id)
+{
+  struct sensor_data *pS = &sensor[sensor_id];
+
+  lcd.setCursor(0, 0);
+  lcd.print("Sensor");
+  lcd.print(sensor_id);
+  lcd.print(": ");
+  lcd.print(pS->cur);
+  lcd.print((char)223); // °
+  lcd.print("C");
+  lcd.setCursor(0, 1);
+  lcd.print(pS->low);
+  lcd.print((char)223); // °
+  lcd.print("C  ");
+  lcd.print(pS->high);
+  lcd.print((char)223); // °
+  lcd.print("C");
 }
 
 void setup()
 {
+  firstScan = 1;
+
   displaySetup();
   Serial.begin(9600);
   lcd.clear();
   lcd.begin(16, 2);
-  firstMeasure = 1;
-  previousMillis = millis();   
+  previousMillis = millis();
+
+  search_sensors();
 }
 
-void loop() 
+void loop()
 {
   byte i;
   byte present = 0;
   byte type_s;
   byte data[12];
-  byte addr[8];
   float celsius, fahrenheit;
   int buttonVal;
-  
-  if (!ds.search(addr)) {
-    Serial.println("No more addresses.");
-    Serial.println();
-    ds.reset_search();
-    delay(250);
-    return;
+  struct sensor_data *pS;
+
+  buttonVal = analogRead(sensorPin);
+  if (buttonVal < 850) {
+    previousMillis = millis();
+    displayOn();
+    selSensor = (selSensor + 1) % MAX_SENSORS;
   }
+  if (millis() - previousMillis > INTERVAL) {
+    previousMillis = millis();
+    displayOff();
+  }
+
+  updateDisplay(selSensor);
+
+  if (!numSensors)
+    return;
+
+  pS = &sensor[scanSensor % numSensors];
   
   Serial.print("ROM =");
   for ( i = 0; i < 8; i++) {
     Serial.write(' ');
-    Serial.print(addr[i], HEX);
+    Serial.print(pS->addr[i], HEX);
   }
 
-  if (OneWire::crc8(addr, 7) != addr[7]) {
+  if (OneWire::crc8(pS->addr, 7) != pS->addr[7]) {
       Serial.println("CRC is not valid!");
       return;
   }
   Serial.println();
  
   // the first ROM byte indicates which chip
-  switch (addr[0]) {
+  switch (pS->addr[0]) {
     case 0x10:
       Serial.println("  Chip = DS18S20");  // or old DS1820
       type_s = 1;
@@ -88,14 +149,14 @@ void loop()
   } 
 
   ds.reset();
-  ds.select(addr);
+  ds.select(pS->addr);
   ds.write(0x44, 1);        // start conversion, with parasite power on at the end
   
   delay(1000);     // maybe 750ms is enough, maybe not
   // we might do a ds.depower() here, but the reset will take care of it.
-  
+
   present = ds.reset();
-  ds.select(addr);    
+  ds.select(pS->addr);
   ds.write(0xBE);         // Read Scratchpad
 
   Serial.print("  Data = ");
@@ -137,37 +198,21 @@ void loop()
   Serial.print(fahrenheit);
   Serial.println(" Fahrenheit");
 
-  if (firstMeasure) {
-    firstMeasure = 0;
-    high = celsius;
-    low = celsius;
+  if (pS->firstData) {
+    pS->firstData = 0;
+    pS->high = celsius;
+    pS->low = celsius;
   }
-  if (celsius > high) {
-    high = celsius;
+  if (celsius > pS->high) {
+    pS->high = celsius;
   }
-  if (celsius < low) {
-    low = celsius;
+  if (celsius < pS->low) {
+    pS->low = celsius;
   }
+  pS->cur = celsius;
 
-  buttonVal = analogRead(sensorPin);
-  if (buttonVal < 850) {
-    previousMillis = millis();
-    displayOn();
-  }
-  if (millis() - previousMillis > INTERVAL) {
-    previousMillis = millis();
-    displayOff();
-  }
-  lcd.setCursor(0, 0);
-  lcd.print("Degrees: ");
-  lcd.print(celsius);
-  lcd.print((char)223); // °
-  lcd.print("C");
-  lcd.setCursor(0, 1);
-  lcd.print(low);
-  lcd.print((char)223); // °
-  lcd.print("C  ");
-  lcd.print(high);
-  lcd.print((char)223); // °
-  lcd.print("C");
+  scanSensor++;
+
+  firstScan = 0;
 }
+
