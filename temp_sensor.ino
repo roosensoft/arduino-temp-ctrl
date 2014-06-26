@@ -10,6 +10,14 @@
 #define STATE_INIT       0
 #define STATE_CONVERTING 1
 
+#define btnRIGHT  0
+#define btnUP     1
+#define btnDOWN   2
+#define btnLEFT   3
+#define btnSELECT 4
+#define btnNONE   5
+
+
 struct sensor_data {
   byte addr[8];
   byte firstData;
@@ -20,15 +28,15 @@ struct sensor_data {
   unsigned long t;
 };
 
-const int button_pin = A0;    // select the input pin for the potentiometer
+const int button_pin = 0;    // select the input pin for the potentiometer
 const int displ_bcklght_pin = 10;
 
 LiquidCrystal lcd(8, 13, 9, 4, 5, 6, 7);
 OneWire ds(2);
 
-static int numSensors = 0;
-static int selSensor = 0;
-static int scanSensor = 0;
+static unsigned int numSensors = 0;
+static unsigned int selSensor = 0;
+static unsigned int scanSensor = 0;
 
 static int display_state;
 static unsigned long displ_last_trig_time = 0;
@@ -38,7 +46,11 @@ static struct sensor_data sensor[CONFIG_MAX_SENSORS];
 #else
 static struct sensor_data sensor[] =
 {
-  {{ 0x28, 0x21, 0x5C, 0xDA, 0x05, 0x00, 0x00, 0x04 }, 1, 0, .0, .0, .0, 0 }
+  {{ 0x28, 0x21, 0x5C, 0xDA, 0x05, 0x00, 0x00, 0x04 }, 1, 0, .0, .0, .0, 0 },
+  {{ 0x28, 0x21, 0x5C, 0xDA, 0x05, 0x00, 0x00, 0x05 }, 1, 0, .0, .0, .0, 0 },
+  {{ 0x28, 0x21, 0x5C, 0xDA, 0x05, 0x00, 0x00, 0x06 }, 1, 0, .0, .0, .0, 0 },
+  {{ 0x28, 0x21, 0x5C, 0xDA, 0x05, 0x00, 0x00, 0x07 }, 1, 0, .0, .0, .0, 0 },
+  {{ 0x28, 0x21, 0x5C, 0xDA, 0x05, 0x00, 0x00, 0x08 }, 1, 0, .0, .0, .0, 0 },
 };
 #endif
 
@@ -74,9 +86,11 @@ static void display_setup(void)
   display_trigger();
 }
 
-static void display_process(int sensor_id)
+static void display_process(unsigned int sensor_id)
 {
-  struct sensor_data *pS = &sensor[sensor_id];
+  struct sensor_data *pS;
+ 
+  pS = &sensor[sensor_id];
 
   lcd.setCursor(0, 0);
   lcd.print("Sensor");
@@ -84,14 +98,14 @@ static void display_process(int sensor_id)
   lcd.print(": ");
   lcd.print(pS->cur);
   lcd.print((char)223); // °
-  lcd.print("C");
+  lcd.print("C  ");
   lcd.setCursor(0, 1);
   lcd.print(pS->low);
   lcd.print((char)223); // °
   lcd.print("C  ");
   lcd.print(pS->high);
   lcd.print((char)223); // °
-  lcd.print("C");
+  lcd.print("C  ");
 
   // backlight timeout
   if (is_display_on() && (millis() - displ_last_trig_time) > DISPLAY_ON_TIME) {
@@ -230,14 +244,28 @@ static void sensor_process(struct sensor_data *pS)
   }
 }
 
-void button_process(void)
+static int keypad_read_btn(void)
 {
-  int buttonVal;
+  int b = analogRead(button_pin);
+  if (b > 1000) return btnNONE;
+  if (b < 50)   return btnRIGHT;
+  if (b < 250)  return btnUP;
+  if (b < 450)  return btnDOWN;
+  if (b < 650)  return btnLEFT;
+  if (b < 850)  return btnSELECT;
+}
 
-  buttonVal = analogRead(button_pin);
-  if (buttonVal < 850) {
-    display_trigger();
-    selSensor = (selSensor + 1) % numSensors;
+static int keypad_process(void)
+{
+  static int last_btn;
+  int b;
+  
+  b = keypad_read_btn();
+  if (b == last_btn) {
+    return btnNONE;
+  } else {
+    last_btn = b;
+    return b;
   }
 }
 
@@ -248,19 +276,30 @@ void setup()
   Serial.begin(9600);
 }
 
+
 void loop()
 {
   struct sensor_data *pS;
+  int b;
 
-  button_process();
+  b = keypad_process();
+  if (b != btnNONE)
+    display_trigger();
+  if (b == btnUP && selSensor < numSensors - 1)
+    selSensor++;
+  else if (b == btnDOWN && selSensor > 0)
+    selSensor--;
+
   display_process(selSensor);
 
   if (!numSensors)
     return;
 
-  pS = &sensor[scanSensor % numSensors];
+  pS = &sensor[scanSensor];
   sensor_process(pS);
 
   scanSensor++;
+  if (scanSensor == numSensors)
+    scanSensor = 0;
 }
 
